@@ -41,6 +41,67 @@ func OpenTransactionDb(
 	}, nil
 }
 
+func OpenTransactionDbColumnFamilies(
+	opts *Options,
+	transactionDBOpts *TransactionDBOptions,
+	name string,
+	cfNames []string,
+	cfOpts []*Options,
+) (*TransactionDB, []*ColumnFamilyHandle, error) {
+	numColumnFamilies := len(cfNames)
+	if numColumnFamilies != len(cfOpts) {
+		return nil, nil, errors.New("must provide the same number of column family names and options")
+	}
+
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	cNames := make([]*C.char, numColumnFamilies)
+	for i, s := range cfNames {
+		cNames[i] = C.CString(s)
+	}
+	defer func() {
+		for _, s := range cNames {
+			C.free(unsafe.Pointer(s))
+		}
+	}()
+
+	cOpts := make([]*C.rocksdb_options_t, numColumnFamilies)
+	for i, o := range cfOpts {
+		cOpts[i] = o.c
+	}
+
+	cHandles := make([]*C.rocksdb_column_family_handle_t, numColumnFamilies)
+
+	var cErr *C.char
+	db := C.rocksdb_transactiondb_open_column_families(
+		opts.c,
+		transactionDBOpts.c,
+		cName,
+		C.int(numColumnFamilies),
+		&cNames[0],
+		&cOpts[0],
+		&cHandles[0],
+		&cErr,
+	)
+	if cErr != nil {
+		defer C.rocksdb_free(unsafe.Pointer(cErr))
+		return nil, errors.New(C.GoString(cErr))
+	}
+
+	cfHandles := make([]*ColumnFamilyHandle, numColumnFamilies)
+	for i, c := range cHandles {
+		cfHandles[i] = NewNativeColumnFamilyHandle(c)
+	}
+
+	return &TransactionDB{
+		name:              name,
+		c:                 db,
+		opts:              opts,
+		transactionDBOpts: transactionDBOpts,
+	}, cfHandles, nil
+}
+
 // NewSnapshot creates a new snapshot of the database.
 func (db *TransactionDB) NewSnapshot() *Snapshot {
 	return NewNativeSnapshot(C.rocksdb_transactiondb_create_snapshot(db.c))
@@ -89,6 +150,22 @@ func (db *TransactionDB) Get(opts *ReadOptions, key []byte) (*Slice, error) {
 	return NewSlice(cValue, cValLen), nil
 }
 
+func (db *TransactionDB) GetCF(opts *ReadOptions, cf *ColumnFamilyHandle, key []byte) (*Slice, error) {
+	var (
+		cErr    *C.char
+		cValLen C.size_t
+		cKey    = byteToChar(key)
+	)
+	cValue := C.rocksdb_transactiondb_get_cf(
+		db.c, opts.c, cf.c, cKey, C.size_t(len(key)), &cValLen, &cErr,
+	)
+	if cErr != nil {
+		defer C.rocksdb_free(unsafe.Pointer(cErr))
+		return nil, errors.New(C.GoString(cErr))
+	}
+	return NewSlice(cValue, cValLen), nil
+}
+
 // Put writes data associated with a key to the database.
 func (db *TransactionDB) Put(opts *WriteOptions, key, value []byte) error {
 	var (
@@ -98,6 +175,22 @@ func (db *TransactionDB) Put(opts *WriteOptions, key, value []byte) error {
 	)
 	C.rocksdb_transactiondb_put(
 		db.c, opts.c, cKey, C.size_t(len(key)), cValue, C.size_t(len(value)), &cErr,
+	)
+	if cErr != nil {
+		defer C.rocksdb_free(unsafe.Pointer(cErr))
+		return errors.New(C.GoString(cErr))
+	}
+	return nil
+}
+
+func (db *TransactionDB) PutCF(opts *WriteOptions, cf *ColumnFamilyHandle, key, value []byte) error {
+	var (
+		cErr   *C.char
+		cKey   = byteToChar(key)
+		cValue = byteToChar(value)
+	)
+	C.rocksdb_transactiondb_put_cf(
+		db.c, opts.c, cf.c, cKey, C.size_t(len(key)), cValue, C.size_t(len(value)), &cErr,
 	)
 	if cErr != nil {
 		defer C.rocksdb_free(unsafe.Pointer(cErr))
@@ -118,6 +211,29 @@ func (db *TransactionDB) Delete(opts *WriteOptions, key []byte) error {
 		return errors.New(C.GoString(cErr))
 	}
 	return nil
+}
+
+func (db *TransactionDB) DeleteCF(opts *WriteOptions, cf *ColumnFamilyHandle, key []byte) error {
+	var (
+		cErr *C.char
+		cKey = byteToChar(key)
+	)
+	C.rocksdb_transactiondb_delete_cf(db.c, opts.c, cf.c, cKey, C.size_t(len(key)), &cErr)
+	if cErr != nil {
+		defer C.rocksdb_free(unsafe.Pointer(cErr))
+		return errors.New(C.GoString(cErr))
+	}
+	return nil
+}
+
+func (db *TransactionDB) NewIterator(opts *ReadOptions) *Iterator {
+	return NewNativeIterator(
+		unsafe.Pointer(C.rocksdb_transactiondb_create_iterator(transaction.c, opts.c)))
+}
+
+func (db *TransactionDB) NewIteratorCF(opts *ReadOptions, cf *ColumnFamilyHandle) *Iterator {
+	return NewNativeIterator(
+		unsafe.Pointer(C.rocksdb_transactiondb_create_iterator_cf(transaction.c, opts.c, cf.c)))
 }
 
 // NewCheckpoint creates a new Checkpoint for this db.

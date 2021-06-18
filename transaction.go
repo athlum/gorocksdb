@@ -46,6 +46,22 @@ func (transaction *Transaction) Rollback() error {
 	return nil
 }
 
+func (transaction *Transaction) SetSavePoint() {
+	C.rocksdb_transaction_set_savepoint(transaction.c)
+}
+
+func (transaction *Transaction) RollbackToSavePoint() error {
+	var (
+		cErr *C.char
+	)
+	C.rocksdb_transaction_rollback_to_savepoint(transaction.c, &cErr)
+	if cErr != nil {
+		defer C.rocksdb_free(unsafe.Pointer(cErr))
+		return errors.New(C.GoString(cErr))
+	}
+	return nil
+}
+
 // Get returns the data associated with the key from the database given this transaction.
 func (transaction *Transaction) Get(opts *ReadOptions, key []byte) (*Slice, error) {
 	var (
@@ -55,6 +71,22 @@ func (transaction *Transaction) Get(opts *ReadOptions, key []byte) (*Slice, erro
 	)
 	cValue := C.rocksdb_transaction_get(
 		transaction.c, opts.c, cKey, C.size_t(len(key)), &cValLen, &cErr,
+	)
+	if cErr != nil {
+		defer C.rocksdb_free(unsafe.Pointer(cErr))
+		return nil, errors.New(C.GoString(cErr))
+	}
+	return NewSlice(cValue, cValLen), nil
+}
+
+func (transaction *Transaction) GetCF(opts *ReadOptions, cf *ColumnFamilyHandle, key []byte) (*Slice, error) {
+	var (
+		cErr    *C.char
+		cValLen C.size_t
+		cKey    = byteToChar(key)
+	)
+	cValue := C.rocksdb_transaction_get_cf(
+		transaction.c, opts.c, cf.c, cKey, C.size_t(len(key)), &cValLen, &cErr,
 	)
 	if cErr != nil {
 		defer C.rocksdb_free(unsafe.Pointer(cErr))
@@ -80,6 +112,22 @@ func (transaction *Transaction) GetForUpdate(opts *ReadOptions, key []byte) (*Sl
 	return NewSlice(cValue, cValLen), nil
 }
 
+func (transaction *Transaction) GetForUpdateCF(opts *ReadOptions, cf *ColumnFamilyHandle, key []byte) (*Slice, error) {
+	var (
+		cErr    *C.char
+		cValLen C.size_t
+		cKey    = byteToChar(key)
+	)
+	cValue := C.rocksdb_transaction_get_for_update_cf(
+		transaction.c, opts.c, cf.c, cKey, C.size_t(len(key)), &cValLen, C.uchar(byte(1)) /*exclusive*/, &cErr,
+	)
+	if cErr != nil {
+		defer C.rocksdb_free(unsafe.Pointer(cErr))
+		return nil, errors.New(C.GoString(cErr))
+	}
+	return NewSlice(cValue, cValLen), nil
+}
+
 // Put writes data associated with a key to the transaction.
 func (transaction *Transaction) Put(key, value []byte) error {
 	var (
@@ -89,6 +137,22 @@ func (transaction *Transaction) Put(key, value []byte) error {
 	)
 	C.rocksdb_transaction_put(
 		transaction.c, cKey, C.size_t(len(key)), cValue, C.size_t(len(value)), &cErr,
+	)
+	if cErr != nil {
+		defer C.rocksdb_free(unsafe.Pointer(cErr))
+		return errors.New(C.GoString(cErr))
+	}
+	return nil
+}
+
+func (transaction *Transaction) PutCF(cf *ColumnFamilyHandle, key, value []byte) error {
+	var (
+		cErr   *C.char
+		cKey   = byteToChar(key)
+		cValue = byteToChar(value)
+	)
+	C.rocksdb_transaction_put_cf(
+		transaction.c, cf.c, cKey, C.size_t(len(key)), cValue, C.size_t(len(value)), &cErr,
 	)
 	if cErr != nil {
 		defer C.rocksdb_free(unsafe.Pointer(cErr))
@@ -111,11 +175,29 @@ func (transaction *Transaction) Delete(key []byte) error {
 	return nil
 }
 
+func (transaction *Transaction) DeleteCF(cf *ColumnFamilyHandle, key []byte) error {
+	var (
+		cErr *C.char
+		cKey = byteToChar(key)
+	)
+	C.rocksdb_transaction_delete_cf(transaction.c, cf.c, cKey, C.size_t(len(key)), &cErr)
+	if cErr != nil {
+		defer C.rocksdb_free(unsafe.Pointer(cErr))
+		return errors.New(C.GoString(cErr))
+	}
+	return nil
+}
+
 // NewIterator returns an Iterator over the database that uses the
 // ReadOptions given.
 func (transaction *Transaction) NewIterator(opts *ReadOptions) *Iterator {
 	return NewNativeIterator(
 		unsafe.Pointer(C.rocksdb_transaction_create_iterator(transaction.c, opts.c)))
+}
+
+func (transaction *Transaction) NewIteratorCF(opts *ReadOptions, cf *ColumnFamilyHandle) *Iterator {
+	return NewNativeIterator(
+		unsafe.Pointer(C.rocksdb_transaction_create_iterator_cf(transaction.c, opts.c, cf.c)))
 }
 
 // Destroy deallocates the transaction object.
