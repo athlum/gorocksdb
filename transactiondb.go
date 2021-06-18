@@ -86,7 +86,7 @@ func OpenTransactionDbColumnFamilies(
 	)
 	if cErr != nil {
 		defer C.rocksdb_free(unsafe.Pointer(cErr))
-		return nil, errors.New(C.GoString(cErr))
+		return nil, nil, errors.New(C.GoString(cErr))
 	}
 
 	cfHandles := make([]*ColumnFamilyHandle, numColumnFamilies)
@@ -228,12 +228,12 @@ func (db *TransactionDB) DeleteCF(opts *WriteOptions, cf *ColumnFamilyHandle, ke
 
 func (db *TransactionDB) NewIterator(opts *ReadOptions) *Iterator {
 	return NewNativeIterator(
-		unsafe.Pointer(C.rocksdb_transactiondb_create_iterator(transaction.c, opts.c)))
+		unsafe.Pointer(C.rocksdb_transactiondb_create_iterator(db.c, opts.c)))
 }
 
 func (db *TransactionDB) NewIteratorCF(opts *ReadOptions, cf *ColumnFamilyHandle) *Iterator {
 	return NewNativeIterator(
-		unsafe.Pointer(C.rocksdb_transactiondb_create_iterator_cf(transaction.c, opts.c, cf.c)))
+		unsafe.Pointer(C.rocksdb_transactiondb_create_iterator_cf(db.c, opts.c, cf.c)))
 }
 
 // NewCheckpoint creates a new Checkpoint for this db.
